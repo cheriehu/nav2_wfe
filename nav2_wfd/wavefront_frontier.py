@@ -18,7 +18,8 @@ import time
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from nav2_msgs.action import FollowWaypoints
+# from nav2_msgs.action import FollowWaypoints
+from nav2_msgs.action import NavigateToPose
 from nav2_msgs.srv import ManageLifecycleNodes
 from nav2_msgs.srv import GetCostmap
 from nav2_msgs.msg import Costmap
@@ -258,7 +259,8 @@ class WaypointFollowerTest(Node):
         self.readyToMove = True
         self.currentPose = None
         self.lastWaypoint = None
-        self.action_client = ActionClient(self, FollowWaypoints, 'FollowWaypoints')
+        # self.action_client = ActionClient(self, FollowWaypoints, 'FollowWaypoints')
+        self.action_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped,
                                                       'initialpose', 10)
 
@@ -269,13 +271,14 @@ class WaypointFollowerTest(Node):
         self.goal_handle = None
 
         pose_qos = QoSProfile(
-          durability=QoSDurabilityPolicy.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-          reliability=QoSReliabilityPolicy.RMW_QOS_POLICY_RELIABILITY_RELIABLE,
-          history=QoSHistoryPolicy.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+          durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+          reliability=QoSReliabilityPolicy.RELIABLE,
+          # reliability=QoSReliabilityPolicy.BEST_EFFORT,
+          history=QoSHistoryPolicy.KEEP_LAST,
           depth=1)
 
         self.model_pose_sub = self.create_subscription(Odometry,
-                                                       '/odom', self.poseCallback, pose_qos)
+          '/odom', self.poseCallback, 10) # pose_qos)
 
         # self.costmapSub = self.create_subscription(Costmap(), '/global_costmap/costmap_raw', self.costmapCallback, pose_qos)
         self.costmapSub = self.create_subscription(OccupancyGrid(), '/map', self.occupancyGridCallback, pose_qos)
@@ -305,8 +308,10 @@ class WaypointFollowerTest(Node):
         self.info_msg(f'World points {location}')
         self.setWaypoints(location)
 
-        action_request = FollowWaypoints.Goal()
-        action_request.poses = self.waypoints
+        # action_request = FollowWaypoints.Goal()
+        action_request = NavigateToPose.Goal()
+        # action_request.poses = self.waypoints
+        action_request.pose = self.waypoints[0]
 
         self.info_msg('Sending goal request...')
         send_goal_future = self.action_client.send_goal_async(action_request)
@@ -324,7 +329,8 @@ class WaypointFollowerTest(Node):
 
         get_result_future = self.goal_handle.get_result_async()
 
-        self.info_msg("Waiting for 'FollowWaypoints' action to complete")
+        # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
+        self.info_msg("Waiting for 'NavigateToPose' action to complete")
         try:
             rclpy.spin_until_future_complete(self, get_result_future)
             status = get_result_future.result().status
@@ -363,10 +369,11 @@ class WaypointFollowerTest(Node):
         time.sleep(5)
 
     def poseCallback(self, msg):
-        self.info_msg('Received amcl_pose')
+        if (not self.initial_pose_received):
+          self.info_msg('Received amcl_pose')
         self.currentPose = msg.pose.pose
         self.initial_pose_received = True
-        
+
 
     def setWaypoints(self, waypoints):
         self.waypoints = []
@@ -384,10 +391,13 @@ class WaypointFollowerTest(Node):
             return False
 
         while not self.action_client.wait_for_server(timeout_sec=1.0):
-            self.info_msg("'FollowWaypoints' action server not available, waiting...")
+            # self.info_msg("'FollowWaypoints' action server not available, waiting...")
+            self.info_msg("'NavigateToPose' action server not available, waiting...")
 
-        action_request = FollowWaypoints.Goal()
-        action_request.poses = self.waypoints
+        # action_request = FollowWaypoints.Goal()
+        action_request = NavigateToPose.Goal()
+        # action_request.poses = self.waypoints
+        action_request.pose = self.waypoints[0]
 
         self.info_msg('Sending goal request...')
         send_goal_future = self.action_client.send_goal_async(action_request)
@@ -407,7 +417,8 @@ class WaypointFollowerTest(Node):
 
         get_result_future = self.goal_handle.get_result_async()
 
-        self.info_msg("Waiting for 'FollowWaypoints' action to complete")
+        # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
+        self.info_msg("Waiting for 'NavigateToPose' action to complete")
         try:
             rclpy.spin_until_future_complete(self, get_result_future)
             status = get_result_future.result().status
@@ -433,7 +444,8 @@ class WaypointFollowerTest(Node):
         self.info_msg('Shutting down')
 
         self.action_client.destroy()
-        self.info_msg('Destroyed FollowWaypoints action client')
+        # self.info_msg('Destroyed FollowWaypoints action client')
+        self.info_msg('Destroyed NavigateToPose action client')
 
         transition_service = 'lifecycle_manager_navigation/manage_nodes'
         mgr_client = self.create_client(ManageLifecycleNodes, transition_service)
@@ -487,15 +499,15 @@ def main(argv=sys.argv[1:]):
     # wait a few seconds to make sure entire stacks are up
     #time.sleep(10)
 
-    wps = [[-0.52, -0.54], [0.58, -0.55], [0.58, 0.52]]
+    # wps = [[-0.52, -0.54], [0.58, -0.55], [0.58, 0.52]]
     starting_pose = [-2.0, -0.5]
 
     test = WaypointFollowerTest()
     #test.dumpCostmap()
-    test.setWaypoints(wps)
+    # test.setWaypoints(wps)
 
     retry_count = 0
-    retries = 2
+    retries = 2000
     while not test.initial_pose_received and retry_count <= retries:
         retry_count += 1
         test.info_msg('Setting initial pose')
