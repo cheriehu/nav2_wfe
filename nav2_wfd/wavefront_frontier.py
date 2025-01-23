@@ -25,7 +25,7 @@ from nav2_msgs.srv import GetCostmap
 from nav2_msgs.msg import Costmap
 from nav_msgs.msg  import OccupancyGrid
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 
 import rclpy
 from rclpy.action import ActionClient
@@ -288,6 +288,14 @@ class WaypointFollowerTest(Node):
         #   history=QoSHistoryPolicy.KEEP_LAST,
         #   depth=1)
 
+        controller_qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            depth=10
+        )
+
+        self.controller_publisher_ = self.create_publisher(String, "/controller_selector", controller_qos_profile)
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         tf_future = self.tf_buffer.wait_for_transform_async('map', 'base_link', rclpy.time.Time())
@@ -306,7 +314,7 @@ class WaypointFollowerTest(Node):
         self.get_logger().info('Running Waypoint Test')
 
     def occupancyGridCallback(self, msg):
-        self.get_logger().info("occupancyGridCallback")
+        # self.get_logger().info("occupancyGridCallback")
         self.map = OccupancyGrid2d(msg)
         # self.moveToFrontiers()
 
@@ -340,7 +348,7 @@ class WaypointFollowerTest(Node):
         action_request.pose = self.waypoints[0]
 
         self.info_msg('Sending goal request...')
-        send_goal_future = self.action_client.send_goal_async(action_request)
+        send_goal_future = self.action_client.send_goal_async(action_request, self._feedbackCallback)
         try:
             rclpy.spin_until_future_complete(self, send_goal_future)
             self.goal_handle = send_goal_future.result()
@@ -367,6 +375,14 @@ class WaypointFollowerTest(Node):
         #self.currentPose = self.waypoints[len(self.waypoints) - 1].pose
 
         self.moveToFrontiers()
+
+    def _feedbackCallback(self, msg):
+        self.feedback = msg.feedback
+        print(self.feedback.distance_remaining)
+        controller_msg = String()
+        if msg.feedback.distance_remaining < 0.2:
+            controller_msg.data = "FollowPathOmni"
+        self.controller_publisher_.publish(controller_msg)
 
     def costmapCallback(self, msg):
         # self.get_logger().info("costmapCallback")
