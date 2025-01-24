@@ -294,6 +294,13 @@ class WaypointFollowerTest(Node):
             depth=10
         )
 
+        self.done_scanning_sub = self.create_subscription(
+            Empty,
+            "/done_scanning",
+            self.doneScanningCallback,
+            10
+        )
+        
         self.controller_publisher_ = self.create_publisher(String, "/controller_selector", controller_qos_profile)
 
         self.tf_buffer = Buffer()
@@ -306,6 +313,8 @@ class WaypointFollowerTest(Node):
         # self.model_pose_sub = self.create_subscription(Odometry,
         #   '/odom', self.poseCallback, 10) # pose_qos)
 
+        self.map_received = False
+
         self.costmapSub = self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmapCallback, 10)
         self.mapSub = self.create_subscription(OccupancyGrid, '/map', self.occupancyGridCallback, 10)
         self.costmap = None
@@ -316,8 +325,14 @@ class WaypointFollowerTest(Node):
     def occupancyGridCallback(self, msg):
         # self.get_logger().info("occupancyGridCallback")
         self.map = OccupancyGrid2d(msg)
+        self.map_received = True
+        self.moveToFrontiers()
+    
+    def doneScanningCallback(self, msg):
+        if not self.map_received:
+            return
         # self.moveToFrontiers()
-
+    
     def moveToFrontiers(self):
         self.get_logger().info("moveToFrontiers")
         frontiers = getFrontier(self.currentPose, 
@@ -334,7 +349,7 @@ class WaypointFollowerTest(Node):
         smallestDist = 1e9
         for f in frontiers:
             dist = math.sqrt(((f[0] - self.currentPose.position.x)**2) + ((f[1] - self.currentPose.position.y)**2))
-            if dist < smallestDist:
+            if dist < smallestDist: # and dist > 0.4:
                 smallestDist = dist
                 location = [f] 
 
@@ -349,38 +364,72 @@ class WaypointFollowerTest(Node):
 
         self.info_msg('Sending goal request...')
         send_goal_future = self.action_client.send_goal_async(action_request, self._feedbackCallback)
+        
+        # Add done callback instead of spin_until_future_complete
+        send_goal_future.add_done_callback(self.goal_response_callback)
+        
+        # try:
+        #     rclpy.spin_until_future_complete(self, send_goal_future)
+        #     self.goal_handle = send_goal_future.result()
+        # except Exception as e:
+        #     self.error_msg('Service call failed %r' % (e,))
+
+        # if not self.goal_handle.accepted:
+        #     self.error_msg('Goal rejected')
+        #     return
+
+        # self.info_msg('Goal accepted')
+
+        # get_result_future = self.goal_handle.get_result_async()
+
+        # # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
+        # self.info_msg("Waiting for 'NavigateToPose' action to complete")
+        # try:
+        #     rclpy.spin_until_future_complete(self, get_result_future)
+        #     status = get_result_future.result().status
+        #     result = get_result_future.result().result
+        # except Exception as e:
+        #     self.error_msg('Service call failed %r' % (e,))
+
+        # #self.currentPose = self.waypoints[len(self.waypoints) - 1].pose
+
+        # # self.moveToFrontiers()
+
+    def goal_response_callback(self, future):
         try:
-            rclpy.spin_until_future_complete(self, send_goal_future)
-            self.goal_handle = send_goal_future.result()
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.error_msg('Goal was rejected by server!')
+                return
+
+            self.info_msg('Goal accepted!')
+            # Save the handle so we can cancel if needed, etc.
+            self.goal_handle = goal_handle
+
+            # Get the result asynchronously
+            self.get_result_future = self.goal_handle.get_result_async()
+            self.get_result_future.add_done_callback(self.get_result_callback)
         except Exception as e:
-            self.error_msg('Service call failed %r' % (e,))
+            self.error_msg(f'Service call failed: {repr(e)}')
 
-        if not self.goal_handle.accepted:
-            self.error_msg('Goal rejected')
-            return
-
-        self.info_msg('Goal accepted')
-
-        get_result_future = self.goal_handle.get_result_async()
-
-        # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
-        self.info_msg("Waiting for 'NavigateToPose' action to complete")
+    def get_result_callback(self, future):
+        """Called when the action server has a result (success, failure, or canceled)."""
         try:
-            rclpy.spin_until_future_complete(self, get_result_future)
-            status = get_result_future.result().status
-            result = get_result_future.result().result
+            result = future.result().result
+            status = future.result().status
+            self.info_msg(f"Goal finished with status [{status}]")
+
+            # If you want to re-invoke frontier search after finishing:
+            # self.moveToFrontiers()
+
         except Exception as e:
-            self.error_msg('Service call failed %r' % (e,))
-
-        #self.currentPose = self.waypoints[len(self.waypoints) - 1].pose
-
-        self.moveToFrontiers()
+            self.error_msg(f'get_result_callback exception: {repr(e)}')
 
     def _feedbackCallback(self, msg):
         self.feedback = msg.feedback
         print(self.feedback.distance_remaining)
         controller_msg = String()
-        if msg.feedback.distance_remaining < 0.2:
+        if msg.feedback.distance_remaining < 0.5:
             controller_msg.data = "FollowPathOmni"
         self.controller_publisher_.publish(controller_msg)
 
@@ -574,7 +623,7 @@ def main(argv=sys.argv[1:]):
         test.info_msg('Getting initial map')
         rclpy.spin_once(test, timeout_sec=1.0)
 
-    test.moveToFrontiers()
+    # test.moveToFrontiers()
 
     rclpy.spin(test)
     # result = test.run(True)
