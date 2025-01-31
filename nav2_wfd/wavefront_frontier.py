@@ -43,6 +43,10 @@ import math
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+import py_trees_ros
+import py_trees
+
+
 OCC_THRESHOLD = 60
 MIN_FRONTIER_SIZE = 5
 
@@ -294,12 +298,12 @@ class WaypointFollowerTest(Node):
             depth=10
         )
 
-        self.done_scanning_sub = self.create_subscription(
-            Empty,
-            "/done_scanning",
-            self.doneScanningCallback,
-            10
-        )
+        # self.done_scanning_sub = self.create_subscription(
+        #     Empty,
+        #     "/done_scanning",
+        #     self.doneScanningCallback,
+        #     10
+        # )
         
         self.controller_publisher_ = self.create_publisher(String, "/controller_selector", controller_qos_profile)
 
@@ -313,7 +317,7 @@ class WaypointFollowerTest(Node):
         # self.model_pose_sub = self.create_subscription(Odometry,
         #   '/odom', self.poseCallback, 10) # pose_qos)
 
-        self.map_received = False
+        # self.map_received = False
 
         self.costmapSub = self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmapCallback, 10)
         self.mapSub = self.create_subscription(OccupancyGrid, '/map', self.occupancyGridCallback, 10)
@@ -325,12 +329,12 @@ class WaypointFollowerTest(Node):
     def occupancyGridCallback(self, msg):
         # self.get_logger().info("occupancyGridCallback")
         self.map = OccupancyGrid2d(msg)
-        self.map_received = True
+        # self.map_received = True
         self.moveToFrontiers()
     
-    def doneScanningCallback(self, msg):
-        if not self.map_received:
-            return
+    # def doneScanningCallback(self, msg):
+    #     if not self.map_received:
+    #         return
         # self.moveToFrontiers()
     
     def moveToFrontiers(self):
@@ -457,7 +461,7 @@ class WaypointFollowerTest(Node):
         # self.init_pose.pose.pose.position.y = pose[1]
         # self.init_pose.header.frame_id = 'map'
         self.currentPose = self.init_pose
-        self.publishInitialPose()
+        # self.publishInitialPose()
         self.initial_pose_received = True
         time.sleep(5)
 
@@ -597,6 +601,135 @@ class WaypointFollowerTest(Node):
         self.get_logger().error(msg)
 
 
+class ExplorerBehaviour(py_trees.behaviour.Behaviour):
+    """
+    Write goal pose to blackboard
+    Behaviour-ifying the WaypointFollwerTest node. 
+    """
+    def __init__(
+            self,
+            name: str="ExplorerBehaviour"
+    ):
+        super(ExplorerBehaviour, self).__init__(name=name)
+        # self.waypoint_follower = WaypointFollowerTest()
+        self._initialization_ok = False
+        self.blackboard = self.attach_blackboard_client(name="ExplorerBehaviour")
+        self.blackboard.register_key("goal_pose", py_trees.common.Access.WRITE)
+
+    def setup(self, **kwargs):
+        try:
+            self.node = kwargs['node']
+        except KeyError as e:
+            error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.qualified_name)
+            raise KeyError(error_message) from e  # 'direct cause' traceability
+        
+        self.waypoints = None
+     
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self.node)
+        tf_future = self.tf_buffer.wait_for_transform_async('map', 'base_link', rclpy.time.Time())
+        rclpy.spin_until_future_complete(self.node, tf_future)
+        self.init_pose = self.getCurrentPose()
+        self.currentPose = self.getCurrentPose()
+
+        self.costmapSub = self.node.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmapCallback, 10)
+        self.mapSub = self.node.create_subscription(OccupancyGrid, '/map', self.mapCallback, 10)
+        self.costmap = None
+        self.map = None
+
+    def getCurrentPose(self):
+        self.node.get_logger().debug("getCurrentPose")
+        transform = self.tf_buffer.lookup_transform(
+            'map',
+            'base_link',
+            rclpy.time.Time(), 
+            Duration(seconds=0.5)
+        )
+        self.pose = PoseStamped()
+        self.pose.pose.position.x = transform.transform.translation.x
+        self.pose.pose.position.y = transform.transform.translation.y
+        self.pose.pose.position.z = transform.transform.translation.z
+        self.pose.pose.orientation = transform.transform.rotation
+        self.pose.header = transform.header
+        return self.pose.pose
+
+    def costmapCallback(self, msg):
+        # print('costmapCallb ack')
+        self.costmap = OccupancyGrid2d(msg)
+        
+    def mapCallback(self, msg):
+        # print('mapCallback')
+        self.map = OccupancyGrid2d(msg)
+
+    def setWaypoints(self, waypoints):
+        self.waypoints = []
+        for wp in waypoints:
+            msg = PoseStamped()
+            msg.header.frame_id = 'map'
+            msg.pose.position.x = wp[0]
+            msg.pose.position.y = wp[1]
+            msg.pose.orientation.w = 1.0
+            self.waypoints.append(msg)
+
+    def getNextFrontier(self):
+        self.getCurrentPose()
+        frontiers = getFrontier(self.currentPose, 
+                                map=self.map, 
+                                costmap=self.costmap, 
+                                logger=self.node.get_logger())
+
+        if len(frontiers) == 0:
+            self.node.get_logger().info('No More Frontiers')
+            return
+
+        location = None
+        largestDist = 0
+        smallestDist = 1e9
+        for f in frontiers:
+            dist = math.sqrt(((f[0] - self.currentPose.position.x)**2) + ((f[1] - self.currentPose.position.y)**2))
+            if dist < smallestDist and dist > 0.4:
+                smallestDist = dist
+                location = [f] 
+
+        #worldFrontiers = [self.costmap.mapToWorld(f[0], f[1]) for f in frontiers]
+        self.node.get_logger().info(f'World points {location}')
+        self.setWaypoints(location)
+
+        return self.waypoints[0]
+
+    def initialise(self):
+        # if not self.waypoint_follower.initial_pose_received:
+        #     self.waypoint_follower.info_msg('Setting initial pose')
+        #     self.waypoint_follower.setInitialPose()
+        #     # self.waypoint_follower.info_msg('Waiting for amcl_pose to be received')
+        #     return
+
+        print(self.map, self.costmap)
+
+        if self.map == None or self.costmap == None:
+            print("getting initial map")
+            return
+        
+        # print(self.map)
+        # print(self.costmap)
+        
+        self._initialization_ok = True
+
+    def update(self):
+        # TODO: add in max retries?
+        if not self._initialization_ok:
+            print("not self._initialization_ok")
+            return py_trees.common.Status.FAILURE
+        
+        else:
+            print("running")
+            pose = self.getNextFrontier()
+            goal_request = NavigateToPose.Goal()
+            goal_request.pose = pose
+            self.blackboard.goal_pose = goal_request
+            return py_trees.common.Status.SUCCESS
+            # rclpy.spin(self.waypoint_follower)
+    
 def main(argv=sys.argv[1:]):
     rclpy.init()
 
