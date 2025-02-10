@@ -43,11 +43,12 @@ import math
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+from  tf2_ros import LookupException
 import py_trees_ros
 import py_trees
 
 
-OCC_THRESHOLD = 60
+OCC_THRESHOLD = 40
 MIN_FRONTIER_SIZE = 5
 
 class Costmap2d():
@@ -327,6 +328,8 @@ class WaypointFollowerTest(Node):
         self.get_logger().info('Running Waypoint Test')
 
     def occupancyGridCallback(self, msg):
+        if self.costmap == None:
+            return
         # self.get_logger().info("occupancyGridCallback")
         self.map = OccupancyGrid2d(msg)
         # self.map_received = True
@@ -353,10 +356,10 @@ class WaypointFollowerTest(Node):
         smallestDist = 1e9
         for f in frontiers:
             dist = math.sqrt(((f[0] - self.currentPose.position.x)**2) + ((f[1] - self.currentPose.position.y)**2))
-            if dist < smallestDist: # and dist > 0.4:
-                smallestDist = dist
+            if dist > largestDist and dist > 0.5:
+                largestDist = dist
                 location = [f] 
-
+        
         #worldFrontiers = [self.costmap.mapToWorld(f[0], f[1]) for f in frontiers]
         self.info_msg(f'World points {location}')
         self.setWaypoints(location)
@@ -371,33 +374,6 @@ class WaypointFollowerTest(Node):
         
         # Add done callback instead of spin_until_future_complete
         send_goal_future.add_done_callback(self.goal_response_callback)
-        
-        # try:
-        #     rclpy.spin_until_future_complete(self, send_goal_future)
-        #     self.goal_handle = send_goal_future.result()
-        # except Exception as e:
-        #     self.error_msg('Service call failed %r' % (e,))
-
-        # if not self.goal_handle.accepted:
-        #     self.error_msg('Goal rejected')
-        #     return
-
-        # self.info_msg('Goal accepted')
-
-        # get_result_future = self.goal_handle.get_result_async()
-
-        # # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
-        # self.info_msg("Waiting for 'NavigateToPose' action to complete")
-        # try:
-        #     rclpy.spin_until_future_complete(self, get_result_future)
-        #     status = get_result_future.result().status
-        #     result = get_result_future.result().result
-        # except Exception as e:
-        #     self.error_msg('Service call failed %r' % (e,))
-
-        # #self.currentPose = self.waypoints[len(self.waypoints) - 1].pose
-
-        # # self.moveToFrontiers()
 
     def goal_response_callback(self, future):
         try:
@@ -498,94 +474,8 @@ class WaypointFollowerTest(Node):
             msg.pose.orientation.w = 1.0
             self.waypoints.append(msg)
 
-    # def run(self, block):
-    #     if not self.waypoints:
-    #         rclpy.error_msg('Did not set valid waypoints before running test!')
-    #         return False
-
-    #     while not self.action_client.wait_for_server(timeout_sec=1.0):
-    #         # self.info_msg("'FollowWaypoints' action server not available, waiting...")
-    #         self.info_msg("'NavigateToPose' action server not available, waiting...")
-
-    #     # action_request = FollowWaypoints.Goal()
-    #     action_request = NavigateToPose.Goal()
-    #     # action_request.poses = self.waypoints
-    #     action_request.pose = self.waypoints[0]
-
-    #     self.info_msg('Sending goal request...')
-    #     send_goal_future = self.action_client.send_goal_async(action_request)
-    #     try:
-    #         rclpy.spin_until_future_complete(self, send_goal_future)
-    #         self.goal_handle = send_goal_future.result()
-    #     except Exception as e:
-    #         self.error_msg('Service call failed %r' % (e,))
-
-    #     if not self.goal_handle.accepted:
-    #         self.error_msg('Goal rejected')
-    #         return False
-
-    #     self.info_msg('Goal accepted')
-    #     if not block:
-    #         return True
-
-    #     get_result_future = self.goal_handle.get_result_async()
-
-    #     # self.info_msg("Waiting for 'FollowWaypoints' action to complete")
-    #     self.info_msg("Waiting for 'NavigateToPose' action to complete")
-    #     try:
-    #         rclpy.spin_until_future_complete(self, get_result_future)
-    #         status = get_result_future.result().status
-    #         result = get_result_future.result().result
-    #     except Exception as e: 
-    #     if len(result.missed_waypoints) > 0:
-    #         self.info_msg('Goal failed to process all waypoints,'
-    #                       ' missed {0} wps.'.format(len(result.missed_waypoints)))
-    #         return False
-
-    #     self.info_msg('Goal succeeded!')
-    #     return True
-
     def publishInitialPose(self):
         self.initial_pose_pub.publish(self.pose)
-
-    # def shutdown(self):
-    #     self.info_msg('Shutting down')
-
-    #     self.action_client.destroy()
-    #     # self.info_msg('Destroyed FollowWaypoints action client')
-    #     self.info_msg('Destroyed NavigateToPose action client')
-
-    #     transition_service = 'lifecycle_manager_navigation/manage_nodes'
-    #     mgr_client = self.create_client(ManageLifecycleNodes, transition_service)
-    #     while not mgr_client.wait_for_service(timeout_sec=1.0):
-    #         self.info_msg(transition_service + ' service not available, waiting...')
-
-    #     req = ManageLifecycleNodes.Request()
-    #     req.command = ManageLifecycleNodes.Request().SHUTDOWN
-    #     future = mgr_client.call_async(req)
-    #     try:
-    #         rclpy.spin_until_future_complete(self, future)
-    #         future.result()
-    #     except Exception as e:
-    #         self.error_msg('%s service call failed %r' % (transition_service, e,))
-
-    #     self.info_msg('{} finished'.format(transition_service))
-
-    #     transition_service = 'lifecycle_manager_localization/manage_nodes'
-    #     mgr_client = self.create_client(ManageLifecycleNodes, transition_service)
-    #     while not mgr_client.wait_for_service(timeout_sec=1.0):
-    #         self.info_msg(transition_service + ' service not available, waiting...')
-
-    #     req = ManageLifecycleNodes.Request()
-    #     req.command = ManageLifecycleNodes.Request().SHUTDOWN
-    #     future = mgr_client.call_async(req)
-    #     try:
-    #         rclpy.spin_until_future_complete(self, future)
-    #         future.result()
-    #     except Exception as e:
-    #         self.error_msg('%s service call failed %r' % (transition_service, e,))
-
-    #     self.info_msg('{} finished'.format(transition_service))
 
     def cancel_goal(self):
         cancel_future = self.goal_handle.cancel_goal_async()
@@ -600,21 +490,26 @@ class WaypointFollowerTest(Node):
     def error_msg(self, msg: str):
         self.get_logger().error(msg)
 
-
 class ExplorerBehaviour(py_trees.behaviour.Behaviour):
     """
     Write goal pose to blackboard
-    Behaviour-ifying the WaypointFollwerTest node. 
+    Behaviour-ifying the WaypointFollwerTest node.
+    Read camera_map from blackboard 
     """
     def __init__(
             self,
-            name: str="ExplorerBehaviour"
+            name: str="ExplorerBehaviour",
+            map_topic: str="/combined_map"
     ):
         super(ExplorerBehaviour, self).__init__(name=name)
         # self.waypoint_follower = WaypointFollowerTest()
+        self.map_topic = map_topic
         self._initialization_ok = False
         self.blackboard = self.attach_blackboard_client(name="ExplorerBehaviour")
         self.blackboard.register_key("goal_pose", py_trees.common.Access.WRITE)
+        self.blackboard.register_key("camera_map", py_trees.common.Access.READ)
+        self.blackboard.register_key("status", py_trees.common.Access.READ)
+        self.blackboard.register_key("status", py_trees.common.Access.WRITE)
 
     def setup(self, **kwargs):
         try:
@@ -633,33 +528,42 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         self.currentPose = self.getCurrentPose()
 
         self.costmapSub = self.node.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmapCallback, 10)
-        self.mapSub = self.node.create_subscription(OccupancyGrid, '/map', self.mapCallback, 10)
+        # self.mapSub = self.node.create_subscription(OccupancyGrid, self.map_topic, self.mapCallback, 10)
         self.costmap = None
         self.map = None
 
     def getCurrentPose(self):
         self.node.get_logger().debug("getCurrentPose")
-        transform = self.tf_buffer.lookup_transform(
-            'map',
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'map',
             'base_link',
-            rclpy.time.Time(), 
+                rclpy.time.Time(), 
             Duration(seconds=0.5)
-        )
-        self.pose = PoseStamped()
-        self.pose.pose.position.x = transform.transform.translation.x
-        self.pose.pose.position.y = transform.transform.translation.y
-        self.pose.pose.position.z = transform.transform.translation.z
-        self.pose.pose.orientation = transform.transform.rotation
-        self.pose.header = transform.header
-        return self.pose.pose
+            )
+            self.pose = PoseStamped()
+            self.pose.pose.position.x = transform.transform.translation.x
+            self.pose.pose.position.y = transform.transform.translation.y
+            self.pose.pose.position.z = transform.transform.translation.z
+            self.pose.pose.orientation = transform.transform.rotation
+            self.pose.header = transform.header
+            return self.pose.pose
+        except LookupException:
+            print("LOOKUP EXCEPTION")
+            return None
 
     def costmapCallback(self, msg):
-        # print('costmapCallb ack')
+        # print('costmapCallback')
         self.costmap = OccupancyGrid2d(msg)
         
     def mapCallback(self, msg):
-        # print('mapCallback')
+        print('mapCallback')
         self.map = OccupancyGrid2d(msg)
+
+        pose = self.getNextFrontier()
+        goal_request = NavigateToPose.Goal()
+        goal_request.pose = pose
+        self.blackboard.goal_pose = goal_request
 
     def setWaypoints(self, waypoints):
         self.waypoints = []
@@ -687,7 +591,7 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         smallestDist = 1e9
         for f in frontiers:
             dist = math.sqrt(((f[0] - self.currentPose.position.x)**2) + ((f[1] - self.currentPose.position.y)**2))
-            if dist < smallestDist and dist > 0.4:
+            if dist < smallestDist and dist > 0.2:
                 smallestDist = dist
                 location = [f] 
 
@@ -698,18 +602,12 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         return self.waypoints[0]
 
     def initialise(self):
-        # if not self.waypoint_follower.initial_pose_received:
-        #     self.waypoint_follower.info_msg('Setting initial pose')
-        #     self.waypoint_follower.setInitialPose()
-        #     # self.waypoint_follower.info_msg('Waiting for amcl_pose to be received')
-        #     return
-
-        print(self.map, self.costmap)
-
-        if self.map == None or self.costmap == None:
-            print("getting initial map")
+        if not self.blackboard.exists("camera_map"):
             return
         
+        if self.blackboard.status != "EXPLORE":
+            return
+
         # print(self.map)
         # print(self.costmap)
         
@@ -718,15 +616,16 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
     def update(self):
         # TODO: add in max retries?
         if not self._initialization_ok:
-            print("not self._initialization_ok")
+            print("explorer not self._initialization_ok")
             return py_trees.common.Status.FAILURE
         
+        if self.blackboard.status != "EXPLORE":
+            return py_trees.common.Status.FAILURE
+
         else:
-            print("running")
-            pose = self.getNextFrontier()
-            goal_request = NavigateToPose.Goal()
-            goal_request.pose = pose
-            self.blackboard.goal_pose = goal_request
+            print("explorer running")
+            self.mapCallback(self.blackboard.camera_map)
+            self.status = "MOVING"
             return py_trees.common.Status.SUCCESS
             # rclpy.spin(self.waypoint_follower)
     
@@ -759,37 +658,6 @@ def main(argv=sys.argv[1:]):
     # test.moveToFrontiers()
 
     rclpy.spin(test)
-    # result = test.run(True)
-    # assert result
-
-    # # preempt with new point
-    # test.setWaypoints([starting_pose])
-    # result = test.run(False)
-    # time.sleep(2)
-    # test.setWaypoints([wps[1]])
-    # result = test.run(False)
-
-    # # cancel
-    # time.sleep(2)
-    # test.cancel_goal()
-
-    # # a failure case
-    # time.sleep(2)
-    # test.setWaypoints([[100.0, 100.0]])
-    # result = test.run(True)
-    # assert not result
-    # result = not result
-
-    # test.shutdown()
-    # test.info_msg('Done Shutting Down.')
-
-    # if not result:
-    #     test.info_msg('Exiting failed')
-    #     exit(1)
-    # else:
-    #     test.info_msg('Exiting passed')
-    #     exit(0)
-
 
 if __name__ == '__main__':
     main()
