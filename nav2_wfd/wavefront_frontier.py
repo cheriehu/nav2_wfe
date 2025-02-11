@@ -537,7 +537,7 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map',
-            'base_link',
+                'base_link',
                 rclpy.time.Time(), 
             Duration(seconds=0.5)
             )
@@ -577,6 +577,9 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
 
     def getNextFrontier(self):
         self.getCurrentPose()
+        if self.map == None or self.costmap == None:
+            return
+
         frontiers = getFrontier(self.currentPose, 
                                 map=self.map, 
                                 costmap=self.costmap, 
