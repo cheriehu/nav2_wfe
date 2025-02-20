@@ -27,6 +27,8 @@ from nav_msgs.msg  import OccupancyGrid
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Empty, String
 
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -48,7 +50,7 @@ import py_trees_ros
 import py_trees
 
 
-OCC_THRESHOLD = 40
+OCC_THRESHOLD = 20
 MIN_FRONTIER_SIZE = 5
 
 class Costmap2d():
@@ -225,7 +227,6 @@ def getFrontier(current_pose:Pose, map:OccupancyGrid2d, costmap:OccupancyGrid2d,
                     mapPointQueue.append(v)
 
         p.classification = p.classification | PointClassification.MapClosed.value
-
     return frontiers
         
 
@@ -242,6 +243,7 @@ def getNeighbors(point, map, fCache):
 def isFrontierPoint(point, map, costmap, fCache):
     if map.getCost(point.mapX, point.mapY) != OccupancyGrid2d.CostValues.NoInformation.value:
         return False
+    
 
     hasFree = False
     # Checks two things
@@ -279,7 +281,7 @@ class WaypointFollowerTest(Node):
         self.action_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.initial_pose_pub = self.create_publisher(PoseStamped,
                                                       'initialpose', 10)
-
+        
         # self.costmapClient = self.create_client(GetCostmap, '/global_costmap/get_costmap')
         # while not self.costmapClient.wait_for_service(timeout_sec=1.0):
         #     self.info_msg('service not available, waiting again...')
@@ -519,7 +521,9 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             raise KeyError(error_message) from e  # 'direct cause' traceability
         
         self.waypoints = None
-     
+
+        self.navigator = BasicNavigator()
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self.node)
         tf_future = self.tf_buffer.wait_for_transform_async('map', 'base_link', rclpy.time.Time())
@@ -537,7 +541,7 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         try:
             transform = self.tf_buffer.lookup_transform(
                 'map',
-                'base_link',
+            'base_link',
                 rclpy.time.Time(), 
             Duration(seconds=0.5)
             )
@@ -561,6 +565,9 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         self.map = OccupancyGrid2d(msg)
 
         pose = self.getNextFrontier()
+        if pose == None:
+            print("pose = None")
+            return
         goal_request = NavigateToPose.Goal()
         goal_request.pose = pose
         self.blackboard.goal_pose = goal_request
@@ -573,6 +580,12 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             msg.pose.position.x = wp[0]
             msg.pose.position.y = wp[1]
             msg.pose.orientation.w = 1.0
+            # path = self.navigator.getPath(start=msg, goal=msg, use_start=False)
+            # print(path)
+            # if path == None:
+            #     input()
+            #     print("PATH IS NONE")
+            #     continue
             self.waypoints.append(msg)
 
     def getNextFrontier(self):
@@ -589,18 +602,37 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             self.node.get_logger().info('No More Frontiers')
             return
 
-        location = None
+        location = []
         largestDist = 0
         smallestDist = 1e9
         for f in frontiers:
+            
+            msg = PoseStamped()
+            msg.header.frame_id = 'map'
+            msg.pose.position.x = f[0]
+            msg.pose.position.y = f[1]
+            msg.pose.orientation.w = 1.0
+            path = self.navigator.getPath(start=msg, goal=msg, use_start=False)
+            print(path)
+
+            if path == None:
+                # input()
+                print("PATH IS NONE")
+                continue
+            
             dist = math.sqrt(((f[0] - self.currentPose.position.x)**2) + ((f[1] - self.currentPose.position.y)**2))
-            if dist < smallestDist and dist > 0.2:
-                smallestDist = dist
-                location = [f] 
+
+            if dist > largestDist and dist > 0.2:
+                largestDist = dist
+                location.append(f) 
 
         #worldFrontiers = [self.costmap.mapToWorld(f[0], f[1]) for f in frontiers]
         self.node.get_logger().info(f'World points {location}')
         self.setWaypoints(location)
+
+        if len(self.waypoints) == 0:
+            self.node.get_logger().info('No More Frontiers')
+            return
 
         return self.waypoints[0]
 
@@ -608,8 +640,8 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         if not self.blackboard.exists("camera_map"):
             return
         
-        if self.blackboard.status != "EXPLORE":
-            return
+        # if self.blackboard.status != "EXPLORE":
+        #     return
 
         # print(self.map)
         # print(self.costmap)
@@ -622,8 +654,8 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             print("explorer not self._initialization_ok")
             return py_trees.common.Status.FAILURE
         
-        if self.blackboard.status != "EXPLORE":
-            return py_trees.common.Status.FAILURE
+        # if self.blackboard.status != "EXPLORE":
+        #     return py_trees.common.Status.FAILURE
 
         else:
             print("explorer running")
