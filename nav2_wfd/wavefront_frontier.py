@@ -35,6 +35,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSReliabilityPolicy
 from rclpy.qos import QoSProfile
 from rclpy.duration import Duration
+from rclpy.parameter import Parameter
 
 from enum import Enum
 
@@ -50,7 +51,7 @@ import py_trees_ros
 import py_trees
 
 
-OCC_THRESHOLD = 20
+OCC_THRESHOLD = 50
 MIN_FRONTIER_SIZE = 5
 
 class Costmap2d():
@@ -512,10 +513,19 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
         self.blackboard.register_key("camera_map", py_trees.common.Access.READ)
         self.blackboard.register_key("status", py_trees.common.Access.READ)
         self.blackboard.register_key("status", py_trees.common.Access.WRITE)
+        self.blackboard.register_key("internal_semantic_map", py_trees.common.Access.READ)
+        self.blackboard.register_key("semantic_map", py_trees.common.Access.WRITE)
 
     def setup(self, **kwargs):
         try:
             self.node = kwargs['node']
+            # self.node.__init__(node_name='ExplorerBehaviour',
+            #                    parameter_overrides=[
+            #                         Parameter('use_sim_time', 
+            #                         Parameter.Type.BOOL, 
+            #                         True)
+            #                         ])
+
         except KeyError as e:
             error_message = "didn't find 'node' in setup's kwargs [{}][{}]".format(self.qualified_name)
             raise KeyError(error_message) from e  # 'direct cause' traceability
@@ -570,7 +580,7 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             return
         goal_request = NavigateToPose.Goal()
         goal_request.pose = pose
-        self.blackboard.goal_pose = goal_request
+        return goal_request
 
     def setWaypoints(self, waypoints):
         self.waypoints = []
@@ -580,12 +590,11 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             msg.pose.position.x = wp[0]
             msg.pose.position.y = wp[1]
             msg.pose.orientation.w = 1.0
-            # path = self.navigator.getPath(start=msg, goal=msg, use_start=False)
+            path = self.navigator.getPath(start=msg, goal=msg, use_start=False)
             # print(path)
-            # if path == None:
-            #     input()
-            #     print("PATH IS NONE")
-            #     continue
+            if path == None:
+                print("PATH IS NONE")
+                continue
             self.waypoints.append(msg)
 
     def getNextFrontier(self):
@@ -613,7 +622,6 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
             msg.pose.position.y = f[1]
             msg.pose.orientation.w = 1.0
             path = self.navigator.getPath(start=msg, goal=msg, use_start=False)
-            print(path)
 
             if path == None:
                 # input()
@@ -659,10 +667,19 @@ class ExplorerBehaviour(py_trees.behaviour.Behaviour):
 
         else:
             print("explorer running")
-            self.mapCallback(self.blackboard.camera_map)
-            self.status = "MOVING"
+            goal_request = self.mapCallback(self.blackboard.camera_map)
+            if goal_request == None:
+                # self.blackboard.status = "EXPLORATION_DONE"
+                self.blackboard.semantic_map = self.blackboard.internal_semantic_map
+            else:
+                self.blackboard.goal_pose = goal_request
+                # self.status = "MOVING"
             return py_trees.common.Status.SUCCESS
-            # rclpy.spin(self.waypoint_follower)
+
+        ## comment out below
+        self.blackboard.semantic_map = self.blackboard.internal_semantic_map
+        return py_trees.common.Status.SUCCESS
+
     
 def main(argv=sys.argv[1:]):
     rclpy.init()
